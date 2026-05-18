@@ -36,4 +36,36 @@
     <range uom="25" subset="0,1,2" nls="CLIMATE"/>
   </editor>
 
+  <!-- Fan state: 0=Off, 1=On (UOM 80 is a fan-state list) -->
+  <editor id="fanstate">
+    <range uom="80" subset="0,1" nls="FANSTATE"/>
+  </editor>
+
+  <!-- Active hold/event type -->
+  <editor id="holdtype">
+    <range uom="25" subset="0,1,2,3,4,5,6,7" nls="HOLDTYPE"/>
+  </editor>
+
+  <!-- Wind direction (16-point compass + 0=unknown) -->
+  <editor id="winddir">
+    <range uom="25" subset="0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16" nls="WINDDIR"/>
+  </editor>
+
+  <!-- Ecobee sky code (0..9) -->
+  <editor id="sky">
+    <range uom="25" subset="0,1,2,3,4,5,6,7,8,9" nls="SKY"/>
+  </editor>
+
+  <!-- Ecobee weather symbol (0..18) -->
+  <editor id="wsymbol">
+    <range uom="25" min="0" max="18"/>
+  </editor>
+
+  <!-- Wind speed mph -->
+  <editor id="wind_mph">
+    <range uom="48" min="0" max="200"/>
+  </editor>
+
+  <!-- POP / humidity already covered by `humidity`; reuse it -->
+
 </editors>

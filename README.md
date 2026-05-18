@@ -14,8 +14,9 @@ This plugin sidesteps the issue entirely — your account, your tokens, your con
 
 - ✅ Authenticate with ecobee.com username/password (no developer API key)
 - ✅ Auto-discover thermostats on your account
-- ✅ Current temperature, heat/cool setpoints, humidity, mode, fan, HVAC state
+- ✅ Current temperature, heat/cool setpoints, humidity, mode, fan mode, HVAC state, **fan state**, **active hold type**
 - ✅ Remote sensor nodes — auto-discovered, temp / humidity / occupancy per sensor
+- ✅ **Weather + Forecast nodes** per thermostat (current conditions + tomorrow's forecast)
 - ✅ Climate commands: Home / Away / Sleep
 - ✅ **Hold Away (Indefinite)** — single command for "leaving the house" automations
 - ✅ Configurable hold type (`nextTransition` or `indefinite`)
@@ -54,6 +55,8 @@ Each Ecobee Thermostat node exposes:
 | `CLIFS` | Fan mode (0=Auto, 1=On) | index |
 | `CLIHUM`| Current humidity     | %   |
 | `CLIHCS`| HVAC current state (0=Idle, 1=Heating, 2=Cooling, 3=Fan Only) | index |
+| `CLIFRS`| Fan state (0=Off, 1=On) — actual fan run, not the mode | index |
+| `CLISMD`| Active hold type (0=None, 1=Next Transition, 2=Indefinite, 3=Date/Time, 4=Hold Hours, 5=Vacation, 6=Demand Response, 7=Quick Save) | index |
 | `GV0`   | Connected            | bool |
 
 ## Thermostat commands
@@ -74,6 +77,22 @@ Each Ecobee Thermostat node exposes:
 | `ST`    | Temperature       | °F  |
 | `CLIHUM`| Humidity (if supported) | % |
 | `GV0`   | Occupancy (0=Unoccupied, 1=Occupied) | index |
+
+## Weather / Forecast drivers
+
+A `<Thermostat> Weather` node (current conditions) and `<Thermostat> Forecast` node (tomorrow) are created automatically when the ecobee API returns forecast data for a thermostat. Both nodes share the same driver layout:
+
+| Driver  | Meaning            | UOM |
+|---------|--------------------|-----|
+| `ST`    | Temperature        | °F  |
+| `GV1`   | Relative humidity  | %   |
+| `GV2`   | Precip probability | %   |
+| `GV3`   | High temp          | °F  |
+| `GV4`   | Low temp           | °F  |
+| `GV5`   | Wind speed         | mph |
+| `GV6`   | Wind direction     | 16-point compass index |
+| `GV7`   | Sky condition      | ecobee sky code |
+| `GV8`   | Weather symbol     | ecobee symbol code |
 
 ## Troubleshooting
 

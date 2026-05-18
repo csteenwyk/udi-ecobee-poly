@@ -19,7 +19,35 @@ ST-ecobee_thermostat-CLIMD-NAME = Mode
 ST-ecobee_thermostat-CLIFS-NAME = Fan
 ST-ecobee_thermostat-CLIHUM-NAME = Humidity
 ST-ecobee_thermostat-CLIHCS-NAME = HVAC State
+ST-ecobee_thermostat-CLIFRS-NAME = Fan State
+ST-ecobee_thermostat-CLISMD-NAME = Hold Type
 ST-ecobee_thermostat-GV0-NAME = Connected
+
+# Weather Drivers
+ND-ecobee_weather-NAME = Ecobee Weather
+ND-ecobee_weather-ICON = TempSensor
+ST-ecobee_weather-ST-NAME = Temperature
+ST-ecobee_weather-GV1-NAME = Humidity
+ST-ecobee_weather-GV2-NAME = Precip Probability
+ST-ecobee_weather-GV3-NAME = High Temp
+ST-ecobee_weather-GV4-NAME = Low Temp
+ST-ecobee_weather-GV5-NAME = Wind Speed
+ST-ecobee_weather-GV6-NAME = Wind Direction
+ST-ecobee_weather-GV7-NAME = Sky
+ST-ecobee_weather-GV8-NAME = Weather Symbol
+
+# Forecast Drivers
+ND-ecobee_forecast-NAME = Ecobee Forecast
+ND-ecobee_forecast-ICON = TempSensor
+ST-ecobee_forecast-ST-NAME = Temperature
+ST-ecobee_forecast-GV1-NAME = Humidity
+ST-ecobee_forecast-GV2-NAME = Precip Probability
+ST-ecobee_forecast-GV3-NAME = High Temp
+ST-ecobee_forecast-GV4-NAME = Low Temp
+ST-ecobee_forecast-GV5-NAME = Wind Speed
+ST-ecobee_forecast-GV6-NAME = Wind Direction
+ST-ecobee_forecast-GV7-NAME = Sky
+ST-ecobee_forecast-GV8-NAME = Weather Symbol
 
 # Sensor Drivers
 ST-ecobee_sensor-ST-NAME = Temperature
@@ -51,6 +79,47 @@ CLIMATE-0 = Home
 CLIMATE-1 = Away
 CLIMATE-2 = Sleep
 
+FANSTATE-0 = Off
+FANSTATE-1 = On
+
+HOLDTYPE-0 = None
+HOLDTYPE-1 = Next Transition
+HOLDTYPE-2 = Indefinite
+HOLDTYPE-3 = Date/Time
+HOLDTYPE-4 = Hold Hours
+HOLDTYPE-5 = Vacation
+HOLDTYPE-6 = Demand Response
+HOLDTYPE-7 = Quick Save
+
+WINDDIR-0 = Unknown
+WINDDIR-1 = N
+WINDDIR-2 = NNE
+WINDDIR-3 = NE
+WINDDIR-4 = ENE
+WINDDIR-5 = E
+WINDDIR-6 = ESE
+WINDDIR-7 = SE
+WINDDIR-8 = SSE
+WINDDIR-9 = S
+WINDDIR-10 = SSW
+WINDDIR-11 = SW
+WINDDIR-12 = WSW
+WINDDIR-13 = W
+WINDDIR-14 = WNW
+WINDDIR-15 = NW
+WINDDIR-16 = NNW
+
+SKY-0 = Sunny
+SKY-1 = Few Clouds
+SKY-2 = Partly Cloudy
+SKY-3 = Mostly Cloudy
+SKY-4 = Overcast
+SKY-5 = Smoke
+SKY-6 = Haze
+SKY-7 = Mist
+SKY-8 = Fog
+SKY-9 = Clear
+
 # Controller Commands
 CMD-ecobee_controller-QUERY-NAME = Query All
 CMD-ecobee_controller-DISCOVER-NAME = Discover
@@ -64,6 +133,10 @@ CMD-ecobee_thermostat-SET_FAN-NAME = Set Fan
 CMD-ecobee_thermostat-SET_CLIMATE-NAME = Set Climate
 CMD-ecobee_thermostat-HOLD_AWAY-NAME = Hold Away (Indefinite)
 CMD-ecobee_thermostat-RESUME-NAME = Resume Program
+
+# Weather / Forecast Commands
+CMD-ecobee_weather-QUERY-NAME = Query
+CMD-ecobee_forecast-QUERY-NAME = Query
 
 # Sensor Commands
 CMD-ecobee_sensor-QUERY-NAME = Query

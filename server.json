@@ -18,7 +18,7 @@
         {
             "title": "Ecobee Direct NodeServer",
             "author": "csteenwyk",
-            "version": "0.1.0",
+            "version": "0.2.0",
             "date": "May 2026",
             "source": "https://github.com/csteenwyk/udi-ecobee-poly",
             "license": "https://github.com/csteenwyk/udi-ecobee-poly/blob/main/LICENSE"

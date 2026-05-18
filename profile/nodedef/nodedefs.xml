@@ -24,6 +24,8 @@
       <st id="CLIFS" editor="fan"/>         <!-- Fan mode -->
       <st id="CLIHUM" editor="humidity"/>   <!-- Current humidity % -->
       <st id="CLIHCS" editor="hcstate"/>    <!-- HVAC current state -->
+      <st id="CLIFRS" editor="fanstate"/>   <!-- Fan running state -->
+      <st id="CLISMD" editor="holdtype"/>   <!-- Active hold type -->
       <st id="GV0" editor="bool"/>          <!-- Connected -->
     </sts>
     <cmds>
@@ -37,6 +39,48 @@
         <cmd id="SET_CLIMATE" param="value" editor="climate"/>
         <cmd id="HOLD_AWAY"/>
         <cmd id="RESUME"/>
+      </accepts>
+    </cmds>
+  </nodeDef>
+
+  <!-- Current weather -->
+  <nodeDef id="ecobee_weather" nodeType="139" nls="ecobee_weather">
+    <sts>
+      <st id="ST"  editor="temp_f"/>
+      <st id="GV1" editor="humidity"/>
+      <st id="GV2" editor="humidity"/>
+      <st id="GV3" editor="temp_f"/>
+      <st id="GV4" editor="temp_f"/>
+      <st id="GV5" editor="wind_mph"/>
+      <st id="GV6" editor="winddir"/>
+      <st id="GV7" editor="sky"/>
+      <st id="GV8" editor="wsymbol"/>
+    </sts>
+    <cmds>
+      <sends/>
+      <accepts>
+        <cmd id="QUERY"/>
+      </accepts>
+    </cmds>
+  </nodeDef>
+
+  <!-- Tomorrow's forecast -->
+  <nodeDef id="ecobee_forecast" nodeType="139" nls="ecobee_forecast">
+    <sts>
+      <st id="ST"  editor="temp_f"/>
+      <st id="GV1" editor="humidity"/>
+      <st id="GV2" editor="humidity"/>
+      <st id="GV3" editor="temp_f"/>
+      <st id="GV4" editor="temp_f"/>
+      <st id="GV5" editor="wind_mph"/>
+      <st id="GV6" editor="winddir"/>
+      <st id="GV7" editor="sky"/>
+      <st id="GV8" editor="wsymbol"/>
+    </sts>
+    <cmds>
+      <sends/>
+      <accepts>
+        <cmd id="QUERY"/>
       </accepts>
     </cmds>
   </nodeDef>

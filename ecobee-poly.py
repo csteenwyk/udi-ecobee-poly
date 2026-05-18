@@ -68,6 +68,25 @@ _CLIMATE_TO_IDX = {v: k for k, v in _IDX_TO_CLIMATE.items()}
 
 _HOLD_TYPES = {'nextTransition', 'indefinite'}
 
+# CLISMD: active hold/event type on the thermostat
+_HOLD_TYPE_TO_IDX = {
+    'none': 0,
+    'nextTransition': 1,
+    'indefinite': 2,
+    'dateTime': 3,
+    'holdHours': 4,
+    'vacation': 5,
+    'demandResponse': 6,
+    'quickSave': 7,
+}
+
+# Ecobee weather wind direction → ISY index (must match WINDDIR-* NLS subset).
+_WIND_DIR_TO_IDX = {
+    '0': 0, 'N': 1, 'NNE': 2, 'NE': 3, 'ENE': 4, 'E': 5,
+    'ESE': 6, 'SE': 7, 'SSE': 8, 'S': 9, 'SSW': 10, 'SW': 11,
+    'WSW': 12, 'W': 13, 'WNW': 14, 'NW': 15, 'NNW': 16,
+}
+
 
 def _hvac_state_index(equipment_status: str) -> int:
     """Derive HCSTATE (idle/heating/cooling/fan only) from equipmentStatus
@@ -83,6 +102,45 @@ def _hvac_state_index(equipment_status: str) -> int:
     if 'fan' in parts:
         return 3
     return 0
+
+
+def _fan_state_index(equipment_status: str) -> int:
+    """CLIFRS: actual fan running state. UOM 80: 0=off, 1=on."""
+    if not equipment_status:
+        return 0
+    parts = {p.strip() for p in equipment_status.split(',') if p.strip()}
+    if parts & {'fan', 'heatPump', 'heatPump2', 'heatPump3',
+                'auxHeat1', 'auxHeat2', 'auxHeat3',
+                'compCool1', 'compCool2', 'ventilator'}:
+        return 1
+    return 0
+
+
+def _hold_type_index(events: list) -> int:
+    """CLISMD: derive currently-running hold/event type from events[]."""
+    if not events:
+        return 0
+    for ev in events:
+        if ev.get('running'):
+            t = ev.get('type', '')
+            if t == 'hold':
+                end = ev.get('endDate')
+                # endDate present + far future is effectively indefinite. Use
+                # the holdClimateRef heuristic: indefinite holds usually have
+                # endDate years in the future. If the event lacks endDate,
+                # treat as indefinite.
+                if not end:
+                    return _HOLD_TYPE_TO_IDX['indefinite']
+                return _HOLD_TYPE_TO_IDX['nextTransition']
+            if t == 'vacation':
+                return _HOLD_TYPE_TO_IDX['vacation']
+            if t == 'quickSave':
+                return _HOLD_TYPE_TO_IDX['quickSave']
+            if t == 'demandResponse':
+                return _HOLD_TYPE_TO_IDX['demandResponse']
+            if t in _HOLD_TYPE_TO_IDX:
+                return _HOLD_TYPE_TO_IDX[t]
+    return _HOLD_TYPE_TO_IDX['none']
 
 
 def _temp_in(value):
@@ -115,6 +173,8 @@ class ThermostatNode(udi_interface.Node):
         {'driver': 'CLIFS',  'value': 0, 'uom': 25},  # Fan mode
         {'driver': 'CLIHUM', 'value': 0, 'uom': 22},  # Humidity %
         {'driver': 'CLIHCS', 'value': 0, 'uom': 25},  # HVAC current state
+        {'driver': 'CLIFRS', 'value': 0, 'uom': 80},  # Fan actually running
+        {'driver': 'CLISMD', 'value': 0, 'uom': 25},  # Active hold type
         {'driver': 'GV0',    'value': 0, 'uom': 2},   # Connected
     ]
 
@@ -176,6 +236,8 @@ class ThermostatNode(udi_interface.Node):
             self._set('CLIHUM', int(hum))
 
         self._set('CLIHCS', _hvac_state_index(equipment))
+        self._set('CLIFRS', _fan_state_index(equipment))
+        self._set('CLISMD', _hold_type_index(tstat.get('events') or []))
         self._set('GV0', 1)
 
         # Track active climate program for our own state; not a driver yet.
@@ -356,6 +418,79 @@ def _sensor_address(sensor_id: str) -> str:
     return cleaned[:14] or 'sensor'
 
 
+# --- Weather / Forecast Nodes ---------------------------------------------
+
+class _WeatherBase(udi_interface.Node):
+    """Shared logic for current-weather and forecast nodes. Both pick a single
+    entry out of `thermostat['weather']['forecasts']`; the index decides
+    which (0 = current, 1 = tomorrow)."""
+
+    _forecast_index = 0
+
+    drivers = [
+        {'driver': 'ST',  'value': 0, 'uom': 17},  # Temperature
+        {'driver': 'GV1', 'value': 0, 'uom': 22},  # Humidity %
+        {'driver': 'GV2', 'value': 0, 'uom': 22},  # POP %
+        {'driver': 'GV3', 'value': 0, 'uom': 17},  # High temp
+        {'driver': 'GV4', 'value': 0, 'uom': 17},  # Low temp
+        {'driver': 'GV5', 'value': 0, 'uom': 48},  # Wind speed (mph)
+        {'driver': 'GV6', 'value': 0, 'uom': 25},  # Wind direction
+        {'driver': 'GV7', 'value': 0, 'uom': 25},  # Sky
+        {'driver': 'GV8', 'value': 0, 'uom': 25},  # Weather symbol
+    ]
+
+    def __init__(self, polyglot, primary, address, name, tstat_id):
+        super().__init__(polyglot, primary, address, name)
+        self._tstat_id = tstat_id
+        self._cache = {}
+
+    def _set(self, driver, value):
+        if value is None:
+            return
+        if self._cache.get(driver) != value:
+            self._cache[driver] = value
+            self.setDriver(driver, value)
+
+    def apply_state(self, tstat: dict):
+        weather = tstat.get('weather') or {}
+        forecasts = weather.get('forecasts') or []
+        if len(forecasts) <= self._forecast_index:
+            return
+        fc = forecasts[self._forecast_index]
+
+        self._set('ST', _temp_in(fc.get('temperature')))
+        self._set('GV1', fc.get('relativeHumidity'))
+        self._set('GV2', fc.get('pop'))
+        self._set('GV3', _temp_in(fc.get('tempHigh')))
+        self._set('GV4', _temp_in(fc.get('tempLow')))
+        self._set('GV5', fc.get('windSpeed'))
+        wd = fc.get('windDirection')
+        if wd in _WIND_DIR_TO_IDX:
+            self._set('GV6', _WIND_DIR_TO_IDX[wd])
+        # Ecobee returns -5002 for "unavailable"; clamp negatives to 0.
+        sky = fc.get('sky')
+        if isinstance(sky, int) and sky >= 0:
+            self._set('GV7', sky)
+        sym = fc.get('weatherSymbol')
+        if isinstance(sym, int) and sym >= 0:
+            self._set('GV8', sym)
+
+    def query(self, command=None):
+        self.reportDrivers()
+
+    commands = {'QUERY': query}
+
+
+class WeatherNode(_WeatherBase):
+    id = 'ecobee_weather'
+    _forecast_index = 0
+
+
+class ForecastNode(_WeatherBase):
+    id = 'ecobee_forecast'
+    _forecast_index = 1
+
+
 # --- Controller ------------------------------------------------------------
 
 class Controller(udi_interface.Node):
@@ -370,6 +505,8 @@ class Controller(udi_interface.Node):
         self._params = Custom(polyglot, 'customparams')
         self._thermostats = {}   # tstat_id → ThermostatNode
         self._sensors = {}       # sensor_id → SensorNode
+        self._weather = {}       # tstat_id → WeatherNode
+        self._forecast = {}      # tstat_id → ForecastNode
         self._node_added = threading.Event()
         self._controller_added = False
         self._reconcile_lock = threading.Lock()
@@ -516,6 +653,28 @@ class Controller(udi_interface.Node):
                 self._thermostats[tid] = node
             self._thermostats[tid].apply_state(tstat)
 
+            # Weather / Forecast nodes. Only create when ecobee actually
+            # returns forecast data for this thermostat — older accounts or
+            # offline thermostats may lack it.
+            forecasts = (tstat.get('weather') or {}).get('forecasts') or []
+            tname = tstat.get('name') or f'Ecobee {tid}'
+            if forecasts and tid not in self._weather:
+                waddr = f'w{tid}'[:14].lower()
+                wnode = WeatherNode(self.poly, self.address, waddr,
+                                    f'{tname} Weather', tid)
+                self._add_node_wait(wnode)
+                self._weather[tid] = wnode
+            if tid in self._weather:
+                self._weather[tid].apply_state(tstat)
+            if len(forecasts) > 1 and tid not in self._forecast:
+                faddr = f'f{tid}'[:14].lower()
+                fnode = ForecastNode(self.poly, self.address, faddr,
+                                     f'{tname} Forecast', tid)
+                self._add_node_wait(fnode)
+                self._forecast[tid] = fnode
+            if tid in self._forecast:
+                self._forecast[tid].apply_state(tstat)
+
             # Discover and update remote sensors. Skip the thermostat's own
             # internal sensor (type='thermostat') — that data is already on
             # the thermostat node.
@@ -566,6 +725,10 @@ class Controller(udi_interface.Node):
         for node in self._thermostats.values():
             node.reportDrivers()
         for node in self._sensors.values():
+            node.reportDrivers()
+        for node in self._weather.values():
+            node.reportDrivers()
+        for node in self._forecast.values():
             node.reportDrivers()
 
     def cmd_discover(self, command=None):

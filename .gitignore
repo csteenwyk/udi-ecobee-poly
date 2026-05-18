@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+.ecobee_state.json
+*.log

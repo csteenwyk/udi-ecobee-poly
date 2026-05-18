@@ -1,0 +1,39 @@
+<editors>
+
+  <editor id="bool">
+    <range uom="2" subset="0,1" nls="ENBL"/>
+  </editor>
+
+  <editor id="temp_f">
+    <range uom="17" min="40" max="95" prec="1"/>
+  </editor>
+
+  <editor id="humidity">
+    <range uom="22" min="0" max="100"/>
+  </editor>
+
+  <editor id="occupancy">
+    <range uom="25" subset="0,1" nls="OCC"/>
+  </editor>
+
+  <!-- HVAC mode: off, heat, cool, auto, aux/emergency -->
+  <editor id="mode">
+    <range uom="25" subset="0,1,2,3,4" nls="HVACMD"/>
+  </editor>
+
+  <!-- Fan mode: auto, on -->
+  <editor id="fan">
+    <range uom="25" subset="0,1" nls="HVACFAN"/>
+  </editor>
+
+  <!-- HVAC current state: idle, heating, cooling, fan only -->
+  <editor id="hcstate">
+    <range uom="25" subset="0,1,2,3" nls="HCSTATE"/>
+  </editor>
+
+  <!-- Climate program: home, away, sleep -->
+  <editor id="climate">
+    <range uom="25" subset="0,1,2" nls="CLIMATE"/>
+  </editor>
+
+</editors>

@@ -1,0 +1,56 @@
+<nodedefs>
+
+  <!-- Controller -->
+  <nodedef id="ecobee_controller" nodeType="139" nls="CTRL">
+    <sts>
+      <st id="ST" editor="bool"/>
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="QUERY"/>
+        <cmd id="DISCOVER"/>
+      </accepts>
+    </cmds>
+  </nodedef>
+
+  <!-- Thermostat -->
+  <nodedef id="ecobee_thermostat" nodeType="139" nls="TSTAT">
+    <sts>
+      <st id="ST"    editor="temp_f"/>      <!-- Current temperature -->
+      <st id="CLISPH" editor="temp_f"/>     <!-- Heat setpoint -->
+      <st id="CLISPC" editor="temp_f"/>     <!-- Cool setpoint -->
+      <st id="CLIMD" editor="mode"/>        <!-- HVAC mode -->
+      <st id="CLIFS" editor="fan"/>         <!-- Fan mode -->
+      <st id="CLIHUM" editor="humidity"/>   <!-- Current humidity % -->
+      <st id="CLIHCS" editor="hcstate"/>    <!-- HVAC current state -->
+      <st id="GV0" editor="bool"/>          <!-- Connected -->
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="QUERY"/>
+        <cmd id="SET_HEAT"    param="value" editor="temp_f"/>
+        <cmd id="SET_COOL"    param="value" editor="temp_f"/>
+        <cmd id="SET_MODE"    param="value" editor="mode"/>
+        <cmd id="SET_FAN"     param="value" editor="fan"/>
+        <cmd id="SET_CLIMATE" param="value" editor="climate"/>
+        <cmd id="HOLD_AWAY"/>
+        <cmd id="RESUME"/>
+      </accepts>
+    </cmds>
+  </nodedef>
+
+  <!-- Remote sensor (optional, future) -->
+  <nodedef id="ecobee_sensor" nodeType="139" nls="RSEN">
+    <sts>
+      <st id="ST"    editor="temp_f"/>
+      <st id="CLIHUM" editor="humidity"/>
+      <st id="GV0" editor="occupancy"/>
+    </sts>
+    <cmds>
+      <accepts>
+        <cmd id="QUERY"/>
+      </accepts>
+    </cmds>
+  </nodedef>
+
+</nodedefs>

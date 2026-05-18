@@ -124,12 +124,10 @@ def _hold_type_index(events: list) -> int:
         if ev.get('running'):
             t = ev.get('type', '')
             if t == 'hold':
-                end = ev.get('endDate')
-                # endDate present + far future is effectively indefinite. Use
-                # the holdClimateRef heuristic: indefinite holds usually have
-                # endDate years in the future. If the event lacks endDate,
-                # treat as indefinite.
-                if not end:
+                # Ecobee marks indefinite holds with the sentinel
+                # endDate=2035-01-01, endTime=00:00:00. The midnight endTime
+                # is the tell — matches old udi-poly-ecobee's heuristic.
+                if ev.get('endTime') == '00:00:00':
                     return _HOLD_TYPE_TO_IDX['indefinite']
                 return _HOLD_TYPE_TO_IDX['nextTransition']
             if t == 'vacation':

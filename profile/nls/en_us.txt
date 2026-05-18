@@ -1,6 +1,6 @@
 # Ecobee NodeServer NLS (English)
 
-# Node names
+# Node Server Names
 ND-ecobee_controller-NAME = Ecobee Controller
 ND-ecobee_controller-ICON = GenericCtl
 ND-ecobee_thermostat-NAME = Ecobee Thermostat
@@ -8,19 +8,23 @@ ND-ecobee_thermostat-ICON = Thermostat
 ND-ecobee_sensor-NAME = Ecobee Sensor
 ND-ecobee_sensor-ICON = MotionSensor
 
-# Driver names
-ST-ctl-ST-NAME = Connected
-ST-tstat-ST-NAME = Current Temperature
-ST-tstat-CLISPH-NAME = Heat Setpoint
-ST-tstat-CLISPC-NAME = Cool Setpoint
-ST-tstat-CLIMD-NAME = Mode
-ST-tstat-CLIFS-NAME = Fan
-ST-tstat-CLIHUM-NAME = Humidity
-ST-tstat-CLIHCS-NAME = HVAC State
-ST-tstat-GV0-NAME = Connected
-ST-rsen-ST-NAME = Temperature
-ST-rsen-CLIHUM-NAME = Humidity
-ST-rsen-GV0-NAME = Occupied
+# Controller Drivers
+ST-ecobee_controller-ST-NAME = Connected
+
+# Thermostat Drivers
+ST-ecobee_thermostat-ST-NAME = Current Temperature
+ST-ecobee_thermostat-CLISPH-NAME = Heat Setpoint
+ST-ecobee_thermostat-CLISPC-NAME = Cool Setpoint
+ST-ecobee_thermostat-CLIMD-NAME = Mode
+ST-ecobee_thermostat-CLIFS-NAME = Fan
+ST-ecobee_thermostat-CLIHUM-NAME = Humidity
+ST-ecobee_thermostat-CLIHCS-NAME = HVAC State
+ST-ecobee_thermostat-GV0-NAME = Connected
+
+# Sensor Drivers
+ST-ecobee_sensor-ST-NAME = Temperature
+ST-ecobee_sensor-CLIHUM-NAME = Humidity
+ST-ecobee_sensor-GV0-NAME = Occupied
 
 # Driver value labels (subset NLS)
 ENBL-0 = Disabled
@@ -47,16 +51,22 @@ CLIMATE-0 = Home
 CLIMATE-1 = Away
 CLIMATE-2 = Sleep
 
-# Command names
-CMD-QUERY-NAME = Query
-CMD-DISCOVER-NAME = Discover
-CMD-SET_HEAT-NAME = Set Heat Setpoint
-CMD-SET_COOL-NAME = Set Cool Setpoint
-CMD-SET_MODE-NAME = Set Mode
-CMD-SET_FAN-NAME = Set Fan
-CMD-SET_CLIMATE-NAME = Set Climate
-CMD-HOLD_AWAY-NAME = Hold Away (Indefinite)
-CMD-RESUME-NAME = Resume Program
+# Controller Commands
+CMD-ecobee_controller-QUERY-NAME = Query All
+CMD-ecobee_controller-DISCOVER-NAME = Discover
+
+# Thermostat Commands
+CMD-ecobee_thermostat-QUERY-NAME = Query
+CMD-ecobee_thermostat-SET_HEAT-NAME = Set Heat Setpoint
+CMD-ecobee_thermostat-SET_COOL-NAME = Set Cool Setpoint
+CMD-ecobee_thermostat-SET_MODE-NAME = Set Mode
+CMD-ecobee_thermostat-SET_FAN-NAME = Set Fan
+CMD-ecobee_thermostat-SET_CLIMATE-NAME = Set Climate
+CMD-ecobee_thermostat-HOLD_AWAY-NAME = Hold Away (Indefinite)
+CMD-ecobee_thermostat-RESUME-NAME = Resume Program
+
+# Sensor Commands
+CMD-ecobee_sensor-QUERY-NAME = Query
 
 # Command param labels
 CMDP-value-NAME = Value

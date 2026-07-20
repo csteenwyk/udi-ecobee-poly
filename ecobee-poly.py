@@ -505,11 +505,13 @@ class Controller(udi_interface.Node):
         self._sensors = {}       # sensor_id → SensorNode
         self._weather = {}       # tstat_id → WeatherNode
         self._forecast = {}      # tstat_id → ForecastNode
-        self._node_added = threading.Event()
+        self._node_events = {}   # node address → threading.Event
+        self._node_events_lock = threading.Lock()
         self._controller_added = False
         self._reconcile_lock = threading.Lock()
         self._last_params = {}
         self.ecobee: Ecobee | None = None
+        self._authenticated = False   # ecobee is non-None even after a failed login
         self.hold_type = 'nextTransition'  # set from custom params
 
         polyglot.subscribe(polyglot.CONFIGDONE,   self._on_config_done)
@@ -517,16 +519,41 @@ class Controller(udi_interface.Node):
         polyglot.subscribe(polyglot.CUSTOMPARAMS, self._on_params)
         polyglot.subscribe(polyglot.POLL,         self.poll)
         polyglot.subscribe(polyglot.STOP,         self.stop)
-        polyglot.subscribe(polyglot.ADDNODEDONE,  lambda d: self._node_added.set())
+        polyglot.subscribe(polyglot.ADDNODEDONE,  self._on_node_added)
         polyglot.ready()
 
     # --- Node lifecycle ---
 
+    def _on_node_added(self, data):
+        addr = (data or {}).get('address')
+        with self._node_events_lock:
+            if addr is None:
+                # Payload without an address: we can't tell who it was for,
+                # so wake everyone rather than hang every waiter.
+                waiters = list(self._node_events.values())
+            else:
+                # A known address with no waiter means a late or duplicate ack.
+                # Waking someone else here is exactly the cross-wake this
+                # per-address scheme exists to prevent.
+                ev = self._node_events.get(addr)
+                waiters = [ev] if ev else []
+        for e in waiters:
+            e.set()
+
     def _add_node_wait(self, node, timeout=15):
-        self._node_added.clear()
-        self.poly.addNode(node)
-        if not self._node_added.wait(timeout=timeout):
-            LOGGER.warning(f'Timeout adding node {getattr(node, "address", "?")}')
+        # One Event per address. A single shared Event let each waiter be woken
+        # by some *other* node's ADDNODEDONE, so adds were both racy and slow —
+        # this plugin adds thermostats, sensors, weather and forecast nodes.
+        ev = threading.Event()
+        with self._node_events_lock:
+            self._node_events[node.address] = ev
+        try:
+            self.poly.addNode(node)
+            if not ev.wait(timeout=timeout):
+                LOGGER.warning(f'Timeout adding node {getattr(node, "address", "?")}')
+        finally:
+            with self._node_events_lock:
+                self._node_events.pop(node.address, None)
 
     def _on_config_done(self):
         if self._controller_added:
@@ -543,11 +570,25 @@ class Controller(udi_interface.Node):
         self.setDriver('ST', 0)
 
     def _on_params(self, params):
+        # PG3 always publishes CUSTOMPARAMS at startup, but with a None payload
+        # when it has nothing stored; load(None) would wipe the params we have.
+        if not params:
+            LOGGER.warning('CUSTOMPARAMS with no data — keeping existing params')
+            return
         self._params.load(params)
-        self._last_params = dict(params or {})
+        self._last_params = dict(params)
         ht = (self._last_params.get('hold_type') or '').strip()
         self.hold_type = ht if ht in _HOLD_TYPES else 'nextTransition'
-        self.poly.Notices.clear()
+        # Targeted deletes, not clear() — clear() also wiped the active poll
+        # notice every time params were saved.
+        self.poly.Notices.delete('creds')
+        # Saving params is the user's "I fixed my credentials" signal. Drop the
+        # stale auth notice AND the failed client, otherwise _reconcile's
+        # `if self.ecobee is None` guard never re-authenticates and the notice
+        # telling them to re-save is unreachable forever.
+        self.poly.Notices.delete('auth')
+        if self.ecobee is not None and not self._authenticated:
+            self.ecobee = None
         if self._controller_added:
             self._reconcile()
 
@@ -599,16 +640,19 @@ class Controller(udi_interface.Node):
             if not self.ecobee.refresh_tokens():
                 self.poly.Notices['auth'] = (
                     'ecobee.com login failed — check username/password and re-save.')
+                self._authenticated = False
                 return False
         except Exception as e:
             LOGGER.error(f'Authentication error: {e}', exc_info=True)
             self.poly.Notices['auth'] = f'Authentication error: {e}'
+            self._authenticated = False
             return False
 
         # Persist the refresh token so we skip the web flow next time.
         if getattr(self.ecobee, 'refresh_token', None):
             self._save_state(self.ecobee.refresh_token)
         LOGGER.info('Authenticated with ecobee.com')
+        self._authenticated = True
         self.setDriver('ST', 1)
         self.poly.Notices.delete('auth')
         self.poly.Notices.delete('creds')
@@ -627,10 +671,15 @@ class Controller(udi_interface.Node):
         except Exception as e:
             LOGGER.error(f'update() failed: {e}', exc_info=True)
             self.poly.Notices['poll'] = f'Ecobee poll failed: {e}'
+            # ST tracks whether we can actually talk to ecobee.com. It used to
+            # be set to 1 at auth and never cleared, so it read "online" for
+            # the whole of an outage.
+            self.setDriver('ST', 0)
             for node in self._thermostats.values():
                 node.mark_offline()
             return
         self.poly.Notices.delete('poll')
+        self.setDriver('ST', 1)
 
         # Persist new refresh token if it changed during the call.
         if getattr(self.ecobee, 'refresh_token', None):

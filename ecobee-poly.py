@@ -706,6 +706,10 @@ class Controller(udi_interface.Node):
         """Map a pyecobee auth exception onto a notice and a retry policy."""
         self._authenticated = False
         self.setDriver('ST', 0)
+        # The notices set below say something more specific than a leftover
+        # "poll failed" from an earlier cycle, and PG3 keeps notices until they
+        # are deleted — so drop the stale one rather than showing both.
+        self.poly.Notices.delete('poll')
 
         if isinstance(err, EcobeeAuthMfaRequiredError):
             self._mfa_challenge = err.args[0] if err.args else None
@@ -843,6 +847,7 @@ class Controller(udi_interface.Node):
             self.ecobee = None
             self._authenticated = False
             self.setDriver('ST', 0)
+            self.poly.Notices.delete('poll')
             self._mark_all_offline()
             return
         except (EcobeeAuthFailedError, EcobeeAuthMfaRequiredError, EcobeeAuthUnknownError) as e:
@@ -953,9 +958,19 @@ class Controller(udi_interface.Node):
                 try:
                     self.ecobee.refresh_tokens()
                     self._persist_tokens()
+                except InvalidTokenError as e:
+                    # The grant is genuinely dead — worth tearing down for.
+                    LOGGER.warning(f'Token refresh rejected ({e}); will re-authenticate')
+                    self._clear_state()
+                    self.ecobee = None
+                    self._authenticated = False
+                    self.setDriver('ST', 0)
                 except Exception as e:
-                    LOGGER.warning(f'Token refresh failed: {e}')
-                    self._handle_auth_error(e)
+                    # Anything else here is opportunistic: update() refreshes on
+                    # demand anyway, and the access token is good for ~an hour.
+                    # Tearing down auth state over one transient blip would
+                    # blank the nodes for a full backoff window for nothing.
+                    LOGGER.warning(f'Token refresh failed, leaving auth intact: {e}')
 
     def query(self, command=None):
         self.reportDrivers()

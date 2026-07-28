@@ -737,6 +737,22 @@ class Controller(udi_interface.Node):
                 'your authenticator app (or the SMS) in the `mfa_code` custom param '
                 'and save. Codes expire in ~30s, so save promptly. This is needed '
                 'once — after it succeeds the plugin refreshes with a stored token.')
+        elif '/u/custom-prompt/' in str(err):
+            # Auth0 Actions can interrupt a login with an arbitrary form —
+            # terms acceptance, email verification, a risk-based "confirm it's
+            # you". The fields are defined by ecobee, so no library can answer
+            # it; a human has to clear it in a browser once. Retrying on a timer
+            # accomplishes nothing, so treat it as a hard stop. (This is also
+            # what the pre-0.4.1 "list index out of range" actually was: the
+            # scrape looking for a token field on a prompt page.)
+            self._auth_blocked = True
+            LOGGER.error(f'ecobee interrupted the login with a custom prompt: {err}')
+            self.poly.Notices['auth'] = (
+                'ecobee accepted the password but interrupted the login with a '
+                'prompt of its own (terms, verification, or a security check). '
+                'Sign in to ecobee.com in a browser with this account, complete '
+                'whatever it asks, then save Custom Parameters here to retry. '
+                'Not retrying on a timer — the prompt needs a person.')
         elif isinstance(err, EcobeeAuthFailedError):
             self._auth_blocked = True
             LOGGER.error(f'ecobee rejected the login: {err}')

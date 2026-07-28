@@ -84,8 +84,15 @@ _STATE_FILE = Path(os.environ.get('PG3_PROFILE', '.')) / '.ecobee_state.json'
 # Auth retry policy. Every failed login is a credential submission against
 # ecobee's Auth0 tenant, and Auth0 throttles both per-account and per-IP — so a
 # failing login must never retry at the shortPoll rate.
+#
+# The cap is deliberately not hours. Rejected credentials and MFA prompts are
+# hard stops that wait for the user, so this backoff only ever sees transport
+# and unknown errors — a DNS or ecobee outage, mostly. b47d382 established that
+# the plugin rides out an outage and recovers unattended; capping much higher
+# would leave it dark long after the network came back, protecting against
+# nothing that _auth_blocked does not already cover.
 _AUTH_RETRY_BASE = 60      # seconds, doubling per consecutive failure
-_AUTH_RETRY_MAX = 3600     # cap at one hour
+_AUTH_RETRY_MAX = 900      # cap at 15 minutes
 
 
 # --- Mapping helpers -------------------------------------------------------
@@ -555,6 +562,7 @@ class Controller(udi_interface.Node):
         self._auth_retry_at = 0.0     # time.monotonic() deadline; 0 = retry now
         self._auth_blocked = False
         self._mfa_challenge = None
+        self._consumed_mfa_code = None    # PG3 keeps mfa_code after it is used
         self._saved_refresh_token = None  # avoid rewriting state on every poll
 
         polyglot.subscribe(polyglot.CONFIGDONE,   self._on_config_done)
@@ -625,12 +633,21 @@ class Controller(udi_interface.Node):
 
         # An MFA code is only meaningful while a challenge is open, and the
         # challenge lives on the existing client — so consume it before the
-        # reset below can discard that client.
+        # reset below can discard that client. A code already submitted once is
+        # skipped: PG3 keeps the param after a successful login, and re-posting
+        # a spent code to a later challenge would just fail.
         mfa_code = (self._last_params.get('mfa_code') or '').strip()
-        if mfa_code and self._mfa_challenge is not None:
-            if self._submit_mfa(mfa_code) and self._controller_added:
-                self._reconcile()
-            return
+        if (mfa_code and self._mfa_challenge is not None
+                and mfa_code != self._consumed_mfa_code):
+            self._consumed_mfa_code = mfa_code
+            # Only a *successful* code short-circuits. On failure fall through to
+            # the reset below, otherwise a save that fixed the password as well
+            # as supplying a code would be swallowed by the early return — the
+            # "correction does nothing until restart" bug from b47d382.
+            if self._submit_mfa(mfa_code):
+                if self._controller_added:
+                    self._reconcile()
+                return
 
         # Targeted deletes, not clear() — clear() also wiped the active poll
         # notice every time params were saved.
@@ -941,7 +958,10 @@ class Controller(udi_interface.Node):
         """Triggered by a thermostat node's QUERY command — fresh fetch."""
         with self._reconcile_lock:
             if not self._authenticated:
-                if self._auth_on_hold() or not self._authenticate():
+                # A QUERY is someone deliberately asking, so it skips the
+                # backoff timer — but not _auth_blocked, which means the
+                # credentials are known-bad and retrying risks a lockout.
+                if self._auth_blocked or not self._authenticate():
                     return
             self._discover_and_poll()
 

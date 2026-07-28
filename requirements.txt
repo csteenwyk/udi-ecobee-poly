@@ -1,2 +1,2 @@
 udi_interface>=3.0.31
-python-ecobee-api>=0.3.2
+python-ecobee-api>=0.4.1

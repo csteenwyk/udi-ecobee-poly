@@ -10,12 +10,20 @@ shared developer API key, which Ecobee has disabled.
 Custom params:
     username   — ecobee.com email address
     password   — ecobee.com password
+    mfa_code   — only if the account has two-factor enabled. Set this when the
+                 plugin raises the "two-factor code required" notice; it is
+                 consumed once to finish the login and then ignored.
     hold_type  — "nextTransition" (default) or "indefinite". Controls whether
                  setpoint and climate changes hold until the next scheduled
                  climate change or stay in effect until manually released.
 
-The refresh_token is cached at <PG3 data dir>/.ecobee_state.json so credentials
-are only used for the initial login + on rotation.
+Requires python-ecobee-api >= 0.4.1, which logs in with the OAuth2
+authorization-code + PKCE flow and returns a real refresh_token. The token is
+cached at <PG3 data dir>/.ecobee_state.json, so the username/password are used
+only for the initial login, after a password change, or if the refresh token is
+revoked. Earlier releases (<= 0.3.2) re-submitted the credentials on every
+token refresh and scraped the response HTML for the token, which broke with an
+IndexError as soon as ecobee returned any interstitial page.
 
 Features:
     - Thermostat: temp / setpoints / mode / fan / humidity / HVAC state
@@ -38,11 +46,21 @@ LOGGER = udi_interface.LOGGER
 
 _IMPORT_ERR = None
 try:
+    # EcobeeAuth*Error and MfaChallenge are 0.4.0+. Importing them here means a
+    # stale 0.3.x left behind by pip (which will not upgrade an already-satisfied
+    # `>=` pin without --upgrade) surfaces as a clear notice instead of an
+    # AttributeError deep in the auth path.
     from pyecobee import (
         Ecobee,
         ECOBEE_USERNAME,
         ECOBEE_PASSWORD,
         ECOBEE_REFRESH_TOKEN,
+    )
+    from pyecobee.errors import (
+        EcobeeAuthFailedError,
+        EcobeeAuthMfaRequiredError,
+        EcobeeAuthUnknownError,
+        InvalidTokenError,
     )
 except ImportError as _e:
     _IMPORT_ERR = str(_e)
@@ -51,7 +69,23 @@ except ImportError as _e:
     ECOBEE_PASSWORD = 'PASSWORD'
     ECOBEE_REFRESH_TOKEN = 'REFRESH_TOKEN'
 
+    # Placeholders so the except clauses below still resolve when the real
+    # library is missing. Nothing raises them, so they can never match.
+    class _MissingPyecobee(Exception):
+        pass
+
+    EcobeeAuthFailedError = type('EcobeeAuthFailedError', (_MissingPyecobee,), {})
+    EcobeeAuthMfaRequiredError = type('EcobeeAuthMfaRequiredError', (_MissingPyecobee,), {})
+    EcobeeAuthUnknownError = type('EcobeeAuthUnknownError', (_MissingPyecobee,), {})
+    InvalidTokenError = type('InvalidTokenError', (_MissingPyecobee,), {})
+
 _STATE_FILE = Path(os.environ.get('PG3_PROFILE', '.')) / '.ecobee_state.json'
+
+# Auth retry policy. Every failed login is a credential submission against
+# ecobee's Auth0 tenant, and Auth0 throttles both per-account and per-IP — so a
+# failing login must never retry at the shortPoll rate.
+_AUTH_RETRY_BASE = 60      # seconds, doubling per consecutive failure
+_AUTH_RETRY_MAX = 3600     # cap at one hour
 
 
 # --- Mapping helpers -------------------------------------------------------
@@ -514,6 +548,15 @@ class Controller(udi_interface.Node):
         self._authenticated = False   # ecobee is non-None even after a failed login
         self.hold_type = 'nextTransition'  # set from custom params
 
+        # Auth retry state. _auth_blocked is a hard stop for failures that only
+        # a human can clear (rejected password, pending MFA); retrying those
+        # automatically is what gets an account locked out.
+        self._auth_failures = 0
+        self._auth_retry_at = 0.0     # time.monotonic() deadline; 0 = retry now
+        self._auth_blocked = False
+        self._mfa_challenge = None
+        self._saved_refresh_token = None  # avoid rewriting state on every poll
+
         polyglot.subscribe(polyglot.CONFIGDONE,   self._on_config_done)
         polyglot.subscribe(polyglot.START,        self.start)
         polyglot.subscribe(polyglot.CUSTOMPARAMS, self._on_params)
@@ -579,14 +622,31 @@ class Controller(udi_interface.Node):
         self._last_params = dict(params)
         ht = (self._last_params.get('hold_type') or '').strip()
         self.hold_type = ht if ht in _HOLD_TYPES else 'nextTransition'
+
+        # An MFA code is only meaningful while a challenge is open, and the
+        # challenge lives on the existing client — so consume it before the
+        # reset below can discard that client.
+        mfa_code = (self._last_params.get('mfa_code') or '').strip()
+        if mfa_code and self._mfa_challenge is not None:
+            if self._submit_mfa(mfa_code) and self._controller_added:
+                self._reconcile()
+            return
+
         # Targeted deletes, not clear() — clear() also wiped the active poll
         # notice every time params were saved.
         self.poly.Notices.delete('creds')
         # Saving params is the user's "I fixed my credentials" signal. Drop the
         # stale auth notice AND the failed client, otherwise _reconcile's
         # `if self.ecobee is None` guard never re-authenticates and the notice
-        # telling them to re-save is unreachable forever.
+        # telling them to re-save is unreachable forever. It also clears the
+        # backoff and the hard block, so the retry happens now rather than at
+        # the end of whatever wait was pending.
         self.poly.Notices.delete('auth')
+        self.poly.Notices.delete('mfa')
+        self._auth_failures = 0
+        self._auth_retry_at = 0.0
+        self._auth_blocked = False
+        self._mfa_challenge = None
         if self.ecobee is not None and not self._authenticated:
             self.ecobee = None
         if self._controller_added:
@@ -604,18 +664,107 @@ class Controller(udi_interface.Node):
             LOGGER.warning(f'Failed to load state: {e}')
             return {}
 
-    def _save_state(self, refresh_token: str):
+    def _save_state(self, refresh_token: str, username: str):
         try:
             _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
             with open(_STATE_FILE, 'w') as f:
-                json.dump({'refresh_token': refresh_token}, f)
+                json.dump({'refresh_token': refresh_token, 'username': username}, f)
         except Exception as e:
             LOGGER.warning(f'Failed to save state: {e}')
+
+    def _clear_state(self):
+        self._saved_refresh_token = None
+        try:
+            _STATE_FILE.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            LOGGER.warning(f'Failed to clear state: {e}')
+
+    def _persist_tokens(self):
+        """Save the refresh token if the library rotated it."""
+        token = getattr(self.ecobee, 'refresh_token', None)
+        if token and token != self._saved_refresh_token:
+            self._save_state(token, getattr(self.ecobee, 'username', '') or '')
+            self._saved_refresh_token = token
+
+    # --- Auth retry policy ---
+
+    def _auth_on_hold(self) -> bool:
+        """True when a login attempt right now would just be abuse."""
+        return self._auth_blocked or time.monotonic() < self._auth_retry_at
+
+    def _auth_backoff(self, err):
+        self._auth_failures += 1
+        delay = min(_AUTH_RETRY_BASE * (2 ** (self._auth_failures - 1)), _AUTH_RETRY_MAX)
+        self._auth_retry_at = time.monotonic() + delay
+        LOGGER.warning(f'ecobee authentication failed ({err}); next attempt in {int(delay)}s')
+        self.poly.Notices['auth'] = (
+            f'ecobee authentication failed: {err} — retrying in {int(delay)}s.')
+
+    def _handle_auth_error(self, err) -> None:
+        """Map a pyecobee auth exception onto a notice and a retry policy."""
+        self._authenticated = False
+        self.setDriver('ST', 0)
+
+        if isinstance(err, EcobeeAuthMfaRequiredError):
+            self._mfa_challenge = err.args[0] if err.args else None
+            self._auth_blocked = True
+            LOGGER.warning('ecobee requires an MFA code; waiting for the mfa_code param')
+            self.poly.Notices['mfa'] = (
+                'ecobee is asking for a two-factor code. Put the current code from '
+                'your authenticator app (or the SMS) in the `mfa_code` custom param '
+                'and save. Codes expire in ~30s, so save promptly. This is needed '
+                'once — after it succeeds the plugin refreshes with a stored token.')
+        elif isinstance(err, EcobeeAuthFailedError):
+            self._auth_blocked = True
+            LOGGER.error(f'ecobee rejected the login: {err}')
+            self.poly.Notices['auth'] = (
+                f'ecobee rejected the login: {err} Fix `username`/`password` in Custom '
+                f'Parameters and save to retry. Not retrying on my own — repeated '
+                f'failed logins can get the account temporarily locked.')
+        else:
+            self._auth_backoff(err)
+
+    def _submit_mfa(self, code: str) -> bool:
+        """Finish an MFA-gated login with a user-supplied OTP."""
+        challenge, self._mfa_challenge = self._mfa_challenge, None
+        try:
+            self.ecobee.submit_mfa_code(challenge, code)
+        except EcobeeAuthFailedError as e:
+            # A rejected code leaves the challenge spent; the user needs a whole
+            # new login to get a fresh one.
+            self._auth_blocked = True
+            LOGGER.warning(f'MFA code rejected: {e}')
+            self.poly.Notices['mfa'] = (
+                f'ecobee rejected that two-factor code ({e}). Save `username`/`password` '
+                f'again to start a new login, then enter a fresh `mfa_code`.')
+            return False
+        except Exception as e:
+            LOGGER.error(f'MFA submission failed: {e}', exc_info=True)
+            self._handle_auth_error(e)
+            return False
+
+        LOGGER.info('MFA accepted; authenticated with ecobee.com')
+        self._on_auth_success()
+        return True
+
+    def _on_auth_success(self):
+        self._authenticated = True
+        self._auth_failures = 0
+        self._auth_retry_at = 0.0
+        self._auth_blocked = False
+        self._mfa_challenge = None
+        self._persist_tokens()
+        self.setDriver('ST', 1)
+        for key in ('auth', 'creds', 'import', 'mfa'):
+            self.poly.Notices.delete(key)
 
     def _authenticate(self) -> bool:
         if Ecobee is None:
             self.poly.Notices['import'] = (
-                f'python-ecobee-api import failed ({_IMPORT_ERR}) — reinstall the plugin.')
+                f'python-ecobee-api import failed ({_IMPORT_ERR}) — this plugin needs '
+                f'version 0.4.1 or newer. Reinstall the plugin to pull it.')
             return False
 
         username = (self._last_params.get('username') or '').strip()
@@ -627,47 +776,83 @@ class Controller(udi_interface.Node):
 
         state = self._load_state()
         refresh_token = state.get('refresh_token')
+        # refresh_tokens() prefers a stored token over the credentials, so a
+        # token cached under a different account would silently keep talking to
+        # that account after the username changed.
+        if refresh_token and state.get('username') and state['username'] != username:
+            LOGGER.info('username changed since the cached token was issued; discarding it')
+            self._clear_state()
+            refresh_token = None
+        self._saved_refresh_token = refresh_token
 
-        config = {
-            ECOBEE_USERNAME: username,
-            ECOBEE_PASSWORD: password,
-        }
-        if refresh_token:
-            config[ECOBEE_REFRESH_TOKEN] = refresh_token
+        # Two passes at most: the cached token, then the credentials if that
+        # token turns out to be revoked.
+        while True:
+            config = {
+                ECOBEE_USERNAME: username,
+                ECOBEE_PASSWORD: password,
+            }
+            if refresh_token:
+                config[ECOBEE_REFRESH_TOKEN] = refresh_token
 
-        try:
-            self.ecobee = Ecobee(config=config)
-            if not self.ecobee.refresh_tokens():
-                self.poly.Notices['auth'] = (
-                    'ecobee.com login failed — check username/password and re-save.')
-                self._authenticated = False
+            try:
+                self.ecobee = Ecobee(config=config)
+                if not self.ecobee.refresh_tokens():
+                    self._authenticated = False
+                    self._auth_backoff('ecobee.com login returned no tokens')
+                    return False
+            except InvalidTokenError as e:
+                if refresh_token:
+                    LOGGER.warning(f'Cached refresh token rejected ({e}); logging in with credentials')
+                    self._clear_state()
+                    refresh_token = None
+                    continue
+                self._handle_auth_error(EcobeeAuthFailedError(str(e)))
                 return False
-        except Exception as e:
-            LOGGER.error(f'Authentication error: {e}', exc_info=True)
-            self.poly.Notices['auth'] = f'Authentication error: {e}'
-            self._authenticated = False
-            return False
+            except Exception as e:
+                LOGGER.error(f'Authentication error: {e}', exc_info=True)
+                self._handle_auth_error(e)
+                return False
+            break
 
-        # Persist the refresh token so we skip the web flow next time.
-        if getattr(self.ecobee, 'refresh_token', None):
-            self._save_state(self.ecobee.refresh_token)
         LOGGER.info('Authenticated with ecobee.com')
-        self._authenticated = True
-        self.setDriver('ST', 1)
-        self.poly.Notices.delete('auth')
-        self.poly.Notices.delete('creds')
-        self.poly.Notices.delete('import')
+        self._on_auth_success()
         return True
 
     def _reconcile(self):
         with self._reconcile_lock:
-            if self.ecobee is None and not self._authenticate():
-                return
+            # Checking `self.ecobee is None` alone was the bug behind the retry
+            # storm: a failed _authenticate() still leaves a client assigned, so
+            # this guard passed and _discover_and_poll ran against an
+            # unauthenticated client, which re-triggered a full login inside
+            # pyecobee on every single short poll.
+            if not self._authenticated:
+                if self._auth_on_hold() or not self._authenticate():
+                    return
             self._discover_and_poll()
 
     def _discover_and_poll(self):
         try:
             self.ecobee.update()
+        except InvalidTokenError as e:
+            # The stored refresh token was revoked (password change, or the
+            # grant was dropped from the ecobee account). Discard it and let the
+            # next poll log in with the credentials.
+            LOGGER.warning(f'ecobee tokens invalid ({e}); will re-authenticate')
+            self._clear_state()
+            self.ecobee = None
+            self._authenticated = False
+            self.setDriver('ST', 0)
+            self._mark_all_offline()
+            return
+        except (EcobeeAuthFailedError, EcobeeAuthMfaRequiredError, EcobeeAuthUnknownError) as e:
+            # update() refreshes tokens internally, so a login failure surfaces
+            # here too. Route it through the same policy rather than letting the
+            # short poll retry it 1,440 times a day.
+            LOGGER.error(f'update() failed during token refresh: {e}', exc_info=True)
+            self._handle_auth_error(e)
+            self._mark_all_offline()
+            return
         except Exception as e:
             LOGGER.error(f'update() failed: {e}', exc_info=True)
             self.poly.Notices['poll'] = f'Ecobee poll failed: {e}'
@@ -675,15 +860,13 @@ class Controller(udi_interface.Node):
             # be set to 1 at auth and never cleared, so it read "online" for
             # the whole of an outage.
             self.setDriver('ST', 0)
-            for node in self._thermostats.values():
-                node.mark_offline()
+            self._mark_all_offline()
             return
         self.poly.Notices.delete('poll')
         self.setDriver('ST', 1)
 
-        # Persist new refresh token if it changed during the call.
-        if getattr(self.ecobee, 'refresh_token', None):
-            self._save_state(self.ecobee.refresh_token)
+        # Persist the refresh token if Auth0 rotated it during the call.
+        self._persist_tokens()
 
         seen_tstats = set()
         seen_sensors = set()
@@ -745,11 +928,16 @@ class Controller(udi_interface.Node):
             if tid not in seen_tstats:
                 node.mark_offline()
 
+    def _mark_all_offline(self):
+        for node in self._thermostats.values():
+            node.mark_offline()
+
     def poll_now(self):
         """Triggered by a thermostat node's QUERY command — fresh fetch."""
         with self._reconcile_lock:
-            if self.ecobee is None and not self._authenticate():
-                return
+            if not self._authenticated:
+                if self._auth_on_hold() or not self._authenticate():
+                    return
             self._discover_and_poll()
 
     # --- Polly hooks ---
@@ -758,14 +946,16 @@ class Controller(udi_interface.Node):
         if flag == 'shortPoll':
             self._reconcile()
         elif flag == 'longPoll':
-            # Force a refresh_tokens periodically to keep the access token live
-            if self.ecobee:
+            # Keep the access token warm. Since 0.4.1 this is an OAuth2
+            # refresh_token grant — no credentials on the wire and no MFA
+            # prompt — so it is cheap enough to run on a timer.
+            if self.ecobee is not None and self._authenticated and not self._auth_on_hold():
                 try:
                     self.ecobee.refresh_tokens()
-                    if getattr(self.ecobee, 'refresh_token', None):
-                        self._save_state(self.ecobee.refresh_token)
+                    self._persist_tokens()
                 except Exception as e:
                     LOGGER.warning(f'Token refresh failed: {e}')
+                    self._handle_auth_error(e)
 
     def query(self, command=None):
         self.reportDrivers()
